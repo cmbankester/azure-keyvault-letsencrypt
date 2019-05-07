@@ -53,7 +53,7 @@ namespace AzureKeyVault.LetsEncrypt
           var bundle = await keyVaultClient.GetCertificateAsync(certificate.Id);
           var domains = bundle.Policy.X509CertificateProperties.SubjectAlternativeNames.DnsNames.ToArray();
           log.LogInformation($"Domains for certificate {thumbprint}: {string.Join(',', domains)}");
-          if (domains.Intersect(request.Domains).Count() == numDomains)
+          if (domains.Union(request.Domains).Count() == numDomains)
           {
             return req.CreateResponse(new { secretName, thumbprint });
           }
