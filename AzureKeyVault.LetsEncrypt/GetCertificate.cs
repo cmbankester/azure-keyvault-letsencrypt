@@ -27,8 +27,6 @@ namespace AzureKeyVault.LetsEncrypt
         return req.CreateErrorResponse(System.Net.HttpStatusCode.BadRequest, $"{nameof(request.Domains)} is empty.");
       }
 
-      log.LogInformation($"Getting certificate for domains: {string.Join(',', request.Domains)}");
-
       var keyVaultClient = CreateKeyVaultClient();
 
       var certificates = await keyVaultClient.GetCertificatesAsync(Settings.Default.VaultBaseUrl);
@@ -36,8 +34,16 @@ namespace AzureKeyVault.LetsEncrypt
       var currentDateTime = DateTime.UtcNow;
 
       var numDomains = request.Domains.Count();
-      foreach (var certificate in certificates)
+      var page = certificates.ToList();
+      var numCertsInPage = page.Count;
+      log.LogInformation($"Got {numCertsInPage} cert(s) from the key vault - checking them to see if any match the domains: '{string.Join(',', request.Domains)}'");
+      var i = 0;
+      while (i < numCertsInPage)
       {
+        var certificate = page.ElementAtOrDefault(i);
+        if (certificate == null) break;
+        i++;
+
         var thumbprint = ByteArrayToString(certificate.X509Thumbprint);
         var secretName = certificate.Identifier.Name;
         log.LogInformation($"Checking certificate {thumbprint}");
@@ -58,7 +64,26 @@ namespace AzureKeyVault.LetsEncrypt
             return req.CreateResponse(new { secretName, thumbprint });
           }
         }
+        else
+        {
+          log.LogInformation("Certificate is either not current or is not issued by letsencrypt");
+        }
+        if (i == numCertsInPage)
+        {
+          log.LogInformation("Reached the end of the page of certs");
+          var link = certificates.NextPageLink;
+          if (link == null) break;
+          log.LogInformation($"Getting next page of certs via link: '{link}'");
+          certificates = await keyVaultClient.GetCertificatesNextAsync(link);
+          if (certificates == null) break;
+          page = certificates.ToList();
+          numCertsInPage = page.Count;
+          log.LogInformation($"Got {numCertsInPage} cert(s) from the key vault - checking them to see if any match the domains");
+          if (numCertsInPage == 0) break;
+          i = 0;
+        }
       }
+      log.LogInformation("Did not find any certs matching the provided domains");
       return req.CreateResponse(System.Net.HttpStatusCode.NotFound);
     }
 
