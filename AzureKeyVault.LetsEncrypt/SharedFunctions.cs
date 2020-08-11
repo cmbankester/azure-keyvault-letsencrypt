@@ -75,17 +75,40 @@ namespace AzureKeyVault.LetsEncrypt
 
             var keyVaultClient = CreateKeyVaultClient();
 
-            var certificates = await keyVaultClient.GetCertificatesAsync(Settings.Default.VaultBaseUrl);
-
-            var list = certificates.Where(x => x.Tags != null && x.Tags.TryGetValue("Issuer", out var issuer) && issuer == "letsencrypt.org")
-                                   .Where(x => (x.Attributes.Expires.Value - currentDateTime).TotalDays < 30)
-                                   .ToArray();
-
             var bundles = new List<CertificateBundle>();
 
-            foreach (var item in list)
+            var certificates = await keyVaultClient.GetCertificatesAsync(Settings.Default.VaultBaseUrl);
+            var page = certificates.ToList();
+            var numCertsInPage = page.Count;
+            var i = 0;
+            while (i < numCertsInPage)
             {
-                bundles.Add(await keyVaultClient.GetCertificateAsync(item.Id));
+                var certificate = page.ElementAtOrDefault(i);
+                if (certificate == null) break;
+                i++;
+                log.LogInformation($"Checking certificate {certificate.Identifier.Name}");
+                if (
+                    certificate.Tags != null
+                    && certificate.Tags.TryGetValue("Issuer", out var issuer)
+                    && issuer == "letsencrypt.org"
+                    && (certificate.Attributes.Expires.Value - currentDateTime).TotalDays < 30
+                )
+                {
+                    log.LogInformation("Certificate is ready for renewal");
+                    bundles.Add(await keyVaultClient.GetCertificateAsync(certificate.Id));
+                }
+
+                if (i == numCertsInPage)
+                {
+                    var link = certificates.NextPageLink;
+                    if (link == null) break;
+                    certificates = await keyVaultClient.GetCertificatesNextAsync(link);
+                    if (certificates == null) break;
+                    page = certificates.ToList();
+                    numCertsInPage = page.Count;
+                    if (numCertsInPage == 0) break;
+                    i = 0;
+                }
             }
 
             return bundles;
